@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build Manifold2D + Manifold2DTests on Linux / macOS.
-#   scripts/build.sh <Debug|Release|Dist>
+#   scripts/build.sh <Debug|Release|Dist> [premake options...]
+#     e.g. scripts/build.sh Debug --sanitize=thread   (the CI sanitizer lanes)
 # Toolchain comes from CC / CXX (defaults: gcc/g++ on Linux, clang/clang++ on
 # macOS). Generator: premake5 gmake, pinned + SHA-256 checked by fetch-premake.sh.
 set -euo pipefail
@@ -8,8 +9,9 @@ set -euo pipefail
 config="${1:-}"
 case "$config" in
     Debug|Release|Dist) ;;
-    *) echo "usage: $0 <Debug|Release|Dist>" >&2; exit 2 ;;
+    *) echo "usage: $0 <Debug|Release|Dist> [premake options...]" >&2; exit 2 ;;
 esac
+shift
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -27,9 +29,9 @@ fi
 # Tell premake which flag dialect to emit (clang rejects some gcc-only flags).
 if "$CXX" --version 2>/dev/null | grep -qi clang; then cc_family=clang; else cc_family=gcc; fi
 
-echo "== premake5 $("$premake" --version | awk '{print $NF}') gmake (--cc=$cc_family)"
+echo "== premake5 $("$premake" --version | awk '{print $NF}') gmake (--cc=$cc_family) $*"
 echo "== $("$CXX" --version | head -n1)"
-"$premake" --cc="$cc_family" gmake
+"$premake" --cc="$cc_family" "$@" gmake
 
 # Determinism guard: no fast-math / FP contraction may reach any generated makefile.
 shopt -s nullglob

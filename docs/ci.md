@@ -8,18 +8,24 @@ Determinism, Supply chain, Reproducing locally, Deviations.
 ## Overview
 
 One workflow, `.github/workflows/ci.yml`, triggered on pushes to `main`, on
-every pull request and on `workflow_dispatch`. It has two jobs:
+every pull request and on `workflow_dispatch`. Its jobs:
 
 - `build-test` -- the OS x compiler x configuration matrix. Every leg runs the
-  same two entry points (build, then tests with two seeds) and uploads
-  `test-results/` as an artifact named `<leg>-<Config>`.
+  same two entry points (build, then tests with three seeds -- see
+  [Seeds](#seeds-and-test-results)) and uploads `test-results/` as an
+  artifact named `<leg>-<Config>`.
+- `sanitize` -- the suite under ASan+UBSan and under TSan (Linux Clang 19
+  Debug, `scripts/build.sh Debug --sanitize=address|thread`, seeds 1 and
+  24301). TSan covers the `std::thread`-pool tests (broadphase/solver
+  MT-invariance, contact events). These lanes upload JUnit only, so the
+  determinism job ignores them.
 - `cross-platform-determinism` -- downloads every leg's artifact and runs
   `scripts/compare-determinism.py` over the determinism dumps (see
   [Determinism](#determinism)). It runs even when a leg failed, and fails if
   fewer than 8 legs produced dumps.
 
 `permissions: contents: read`; one concurrent run per ref (a newer push
-cancels the older run).
+cancels the older run); every job has a timeout; artifacts are kept 14 days.
 
 ## Matrix
 
@@ -73,11 +79,22 @@ scripts/run-tests.sh  <Debug|Release|Dist> [--rng-seed N]
 
 ## Seeds and test results
 
-Each leg runs the full suite twice: `--rng-seed 1` and `--rng-seed 24301`.
-The seed is passed to Catch2 (`--rng-seed`) and to rapidcheck
-(`RC_PARAMS=seed=N`), so every property-based failure is reproducible from the
-log. The seeds are fixed (not run-derived) so a red run reproduces bit-for-bit
-locally; rotating them is a one-line change in `ci.yml` (`SEED_A`/`SEED_B`).
+Each leg runs the full suite three times. The seed is passed to Catch2
+(`--rng-seed`) and to rapidcheck (`RC_PARAMS=seed=N`), so every property-based
+failure is reproducible from the log:
+
+- `--rng-seed 1` and `--rng-seed 24301` -- **fixed**, so a red run reproduces
+  bit-for-bit locally and the documented results below stay comparable
+  (`SEED_A`/`SEED_B` in `ci.yml`);
+- `--rng-seed <run_number % 98999 + 1000>` -- **moves with the run**, so new
+  rapidcheck cases and test orders keep being explored. It is printed in the
+  step name, the banner and every result file name; a failure reproduces with
+  that `--rng-seed N`.
+
+The randomized seed complements the determinism verification instead of
+weakening it: its dump joins the cross-platform comparison like the fixed
+seeds' (the scenes use no randomness, so every rule below applies to it
+unchanged).
 
 Outputs, per run, under `test-results/`:
 
@@ -173,6 +190,8 @@ scope here because it changes behaviour).
 - Actions pinned by full commit SHA (version in a trailing comment):
   `actions/checkout` v7.0.1, `actions/upload-artifact` v7.0.2,
   `actions/download-artifact` v8.0.2. Checkout does not persist credentials.
+- The sanitizer lanes install `clang-19`, `libclang-rt-19-dev` and
+  `libstdc++-14-dev` from the Ubuntu 24.04 archive (signed apt).
 - premake **5.0.0-beta8** everywhere:
   - Windows: vendored `vendor/premake5/premake5.exe`, byte-identical to the
     upstream `premake-5.0.0-beta8-windows.zip` binary, SHA-256
@@ -194,6 +213,12 @@ CC=gcc-14   CXX=g++-14     scripts/build.sh Release && scripts/run-tests.sh Rele
 CC=clang-19 CXX=clang++-19 scripts/build.sh Release && scripts/run-tests.sh Release --rng-seed 24301
 ```
 
+```bash
+# the sanitizer lanes (clean bin/ bin-int/ and vendor/*/bin* when switching lanes)
+CC=clang-19 CXX=clang++-19 scripts/build.sh Debug --sanitize=address && scripts/run-tests.sh Debug --rng-seed 1
+CC=clang-19 CXX=clang++-19 scripts/build.sh Debug --sanitize=thread  && scripts/run-tests.sh Debug --rng-seed 1
+```
+
 ```powershell
 scripts/build.ps1 Release; scripts/run-tests.ps1 Release --rng-seed 1
 ```
@@ -206,7 +231,7 @@ are per config, not per compiler). Compare dumps from several machines with
 
 From the shared standard, with reasons:
 
-1. **Extra job `cross-platform-determinism`.** The standard is one matrix; the
+1. **Extra jobs `cross-platform-determinism` and `sanitize`.** The standard is one matrix; the
    determinism diff needs every leg's output, so it is a dependent job in the
    same workflow (still one `ci.yml`).
 2. **`trig` scenes are gated on the trig fingerprint, not on "all legs"** --
