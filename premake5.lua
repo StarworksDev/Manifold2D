@@ -5,6 +5,16 @@
 -- DLL boundary here (that is the Arcane /MD consumer's concern, handled by
 -- Arcane's own inline project, not this file).
 
+newoption {
+    trigger = "sanitize",
+    value = "MODE",
+    description = "Build with a sanitizer (Linux/clang; used by the CI sanitizer lanes)",
+    allowed = {
+        { "address", "AddressSanitizer + UndefinedBehaviorSanitizer" },
+        { "thread",  "ThreadSanitizer" },
+    }
+}
+
 workspace "Manifold2D"
     architecture "x64"
     configurations { "Debug", "Release", "Dist" }
@@ -22,7 +32,9 @@ workspace "Manifold2D"
 
     -- The vendored Catch2/rapidcheck wrappers honor these globals. Static CRT
     -- default (no DLL boundary); project files land in each dep's ide/ subdir.
-    THIRDPARTY_STATICRUNTIME    = "on"
+    -- A sanitizer build links the dynamic runtime everywhere (static
+    -- libstdc++ conflicts with the sanitizer runtimes' link ordering).
+    THIRDPARTY_STATICRUNTIME    = _OPTIONS["sanitize"] and "off" or "on"
     THIRDPARTY_PROJECT_LOCATION = "ide"
 
     filter "system:windows"
@@ -38,6 +50,16 @@ workspace "Manifold2D"
     filter "system:macosx"                   -- Apple Silicon (arm64): NEON backend
         architecture "ARM64"
         buildoptions { "-ffp-contract=off", "-fno-fast-math", "-Wall", "-Wextra" }
+
+    -- Sanitizer lanes (opt-in via --sanitize; Linux/clang). Option-gated, so a
+    -- generation without --sanitize is byte-identical. Compile AND link need
+    -- the flags. The determinism flags above still apply.
+    filter { "options:sanitize=address" }
+        buildoptions { "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-sanitize-recover=all" }
+        linkoptions  { "-fsanitize=address,undefined" }
+    filter { "options:sanitize=thread" }
+        buildoptions { "-fsanitize=thread" }
+        linkoptions  { "-fsanitize=thread" }
     filter {}
 
     group "Dependencies"
@@ -50,7 +72,7 @@ workspace "Manifold2D"
         language "C++"
         cppdialect "C++23"
         location "ide"
-        staticruntime "on"
+        staticruntime(_OPTIONS["sanitize"] and "off" or "on")
         floatingpoint "Strict"                -- determinism: /fp:fast is banned
         targetdir ("bin/" .. outputdir .. "/%{prj.name}")
         objdir    ("bin-int/" .. outputdir .. "/%{prj.name}")
@@ -74,7 +96,7 @@ workspace "Manifold2D"
         language "C++"
         cppdialect "C++23"
         location "ide"
-        staticruntime "on"
+        staticruntime(_OPTIONS["sanitize"] and "off" or "on")
         floatingpoint "Strict"
         targetdir ("bin/" .. outputdir .. "/%{prj.name}")
         objdir    ("bin-int/" .. outputdir .. "/%{prj.name}")
